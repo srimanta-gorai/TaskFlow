@@ -19,6 +19,7 @@ const menuItems = [
   { label: "My Projects", icon: FolderKanban },
   { label: "My Tasks", icon: CheckSquare },
   { label: "Calendar", icon: CalendarDays },
+  { label: "Kanban Board", icon: FolderKanban },
 ];
 
 export default function Sidebar() {
@@ -52,6 +53,7 @@ export default function Sidebar() {
       "My Projects": "/projects",
       "My Tasks": "/tasks",
       Calendar: "/calendar",
+      "Kanban Board": "/kanban",
     };
 
     return (
