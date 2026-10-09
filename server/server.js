@@ -6,6 +6,7 @@ require("dotenv").config();
 const connectDB = require("./config/db");
 const taskRoutes = require("./routes/taskRoutes");
 const projectRoutes = require("./routes/projectRoutes");
+const authRoutes = require("./routes/authRoutes");
 
 const app = express();
 
@@ -19,11 +20,15 @@ app.get("/", (req, res) => {
   });
 });
 
+//Auth API
+app.use("/api/auth", authRoutes);
+
 // Task API
 app.use("/api/tasks", taskRoutes);
 
 // Project API
 app.use("/api/projects", projectRoutes);
+
 
 const PORT = process.env.PORT || 5000;
 
