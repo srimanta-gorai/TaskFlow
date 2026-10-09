@@ -1,5 +1,6 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import axios from "axios";
 import {
   Plus,
   Search,
@@ -10,40 +11,7 @@ import {
   X,
 } from "lucide-react";
 
-const initialTasks = [
-  {
-    id: 1,
-    title: "Finalize homepage design",
-    project: "Website Redesign",
-    status: "In Progress",
-    priority: "High",
-    dueDate: "2026-10-18",
-  },
-  {
-    id: 2,
-    title: "Fix responsive navigation",
-    project: "Mobile App",
-    status: "To Do",
-    priority: "Medium",
-    dueDate: "2026-10-22",
-  },
-  {
-    id: 3,
-    title: "Review campaign analytics",
-    project: "Marketing Campaign",
-    status: "Completed",
-    priority: "Low",
-    dueDate: "2026-10-15",
-  },
-  {
-    id: 4,
-    title: "Prepare project presentation",
-    project: "Website Redesign",
-    status: "In Progress",
-    priority: "High",
-    dueDate: "2026-10-20",
-  },
-];
+const API_URL = "http://localhost:5000/api/tasks";
 
 const emptyForm = {
   title: "",
@@ -53,13 +21,68 @@ const emptyForm = {
   dueDate: "",
 };
 
+// Convert the backend status to the labels used by the UI.
+const toUIStatus = (status) => {
+  const statuses = {
+    todo: "To Do",
+    inprogress: "In Progress",
+    done: "Completed",
+  };
+
+  return statuses[status] || status || "To Do";
+};
+
+// Convert the UI status to the values accepted by MongoDB.
+const toAPIStatus = (status) => {
+  const statuses = {
+    "To Do": "todo",
+    "In Progress": "inprogress",
+    Completed: "done",
+  };
+
+  return statuses[status] || "todo";
+};
+
+// Convert a MongoDB task into the format used by this page.
+const toUITask = (task) => ({
+  id: task._id,
+  title: task.title,
+  project: task.project || "General",
+  status: toUIStatus(task.status),
+  priority: task.priority || "Medium",
+  dueDate: task.dueDate
+    ? String(task.dueDate).slice(0, 10)
+    : "",
+});
+
 export default function Tasks() {
-  const [tasks, setTasks] = useState(initialTasks);
+  const [tasks, setTasks] = useState([]);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  // Load tasks from MongoDB through the Express API.
+  async function fetchTasks() {
+    try {
+      setError("");
+      const response = await axios.get(API_URL);
+      setTasks(response.data.map(toUITask));
+    } catch (err) {
+      console.error("Failed to load tasks:", err);
+      setError("Could not load tasks. Check that your backend is running.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchTasks();
+  }, []);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
@@ -92,54 +115,85 @@ export default function Tasks() {
     setShowForm(true);
   }
 
-  function handleSubmit(event) {
+  // Create a new task or update an existing one in MongoDB.
+  async function handleSubmit(event) {
     event.preventDefault();
 
     if (!form.title.trim()) return;
 
-    if (editingId !== null) {
-      setTasks((current) =>
-        current.map((task) =>
-          task.id === editingId ? { ...task, ...form } : task
-        )
-      );
-    } else {
-      setTasks((current) => [
-        {
-          id: Date.now(),
-          ...form,
-        },
-        ...current,
-      ]);
-    }
+    const taskData = {
+      ...form,
+      title: form.title.trim(),
+      status: toAPIStatus(form.status),
+      dueDate: form.dueDate || null,
+    };
 
-    setShowForm(false);
-    setEditingId(null);
-    setForm(emptyForm);
+    try {
+      setSaving(true);
+      setError("");
+
+      if (editingId !== null) {
+        await axios.put(`${API_URL}/${editingId}`, taskData);
+      } else {
+        await axios.post(API_URL, taskData);
+      }
+
+      await fetchTasks();
+
+      setShowForm(false);
+      setEditingId(null);
+      setForm(emptyForm);
+    } catch (err) {
+      console.error("Failed to save task:", err);
+      setError(
+        err.response?.data?.message || "Could not save the task."
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function deleteTask(id) {
+  // Delete the task from MongoDB.
+  async function deleteTask(id) {
     const confirmed = window.confirm(
       "Are you sure you want to delete this task?"
     );
 
-    if (confirmed) {
+    if (!confirmed) return;
+
+    try {
+      setError("");
+      await axios.delete(`${API_URL}/${id}`);
       setTasks((current) => current.filter((task) => task.id !== id));
+    } catch (err) {
+      console.error("Failed to delete task:", err);
+      setError("Could not delete the task.");
     }
   }
 
-  function toggleComplete(task) {
-    setTasks((current) =>
-      current.map((item) =>
-        item.id === task.id
-          ? {
-              ...item,
-              status:
-                item.status === "Completed" ? "To Do" : "Completed",
-            }
-          : item
-      )
-    );
+  // Update completion status in MongoDB.
+  async function toggleComplete(task) {
+    const newStatus =
+      task.status === "Completed" ? "To Do" : "Completed";
+
+    try {
+      setError("");
+
+      await axios.put(`${API_URL}/${task.id}`, {
+        status: toAPIStatus(newStatus),
+      });
+
+      setTasks((current) =>
+        current.map((item) =>
+          item.id === task.id
+            ? { ...item, status: newStatus }
+            : item
+        )
+      );
+    } catch (err) {
+      console.error("Failed to update task:", err);
+      setError("Could not update the task status.");
+    }
   }
 
   const statusStyles = {
@@ -176,16 +230,35 @@ export default function Tasks() {
         </button>
       </header>
 
+      {error && (
+        <div
+          role="alert"
+          className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700"
+        >
+          <span>{error}</span>
+          <button
+            onClick={() => setError("")}
+            aria-label="Dismiss error"
+          >
+            <X size={18} />
+          </button>
+        </div>
+      )}
+
       <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         {[
           { label: "All Tasks", value: tasks.length },
           {
             label: "In Progress",
-            value: tasks.filter((task) => task.status === "In Progress").length,
+            value: tasks.filter(
+              (task) => task.status === "In Progress"
+            ).length,
           },
           {
             label: "Completed",
-            value: tasks.filter((task) => task.status === "Completed").length,
+            value: tasks.filter(
+              (task) => task.status === "Completed"
+            ).length,
           },
         ].map((item) => (
           <div
@@ -222,83 +295,100 @@ export default function Tasks() {
           </select>
         </div>
 
-        <div className="space-y-3">
-          {filteredTasks.map((task) => (
-            <article
-              key={task.id}
-              className="flex flex-col gap-4 rounded-xl border border-slate-100 p-4 transition hover:border-violet-200 sm:flex-row sm:items-center"
-            >
-              <button
-                onClick={() => toggleComplete(task)}
-                aria-label={`Toggle completion for ${task.title}`}
-                className="self-start text-slate-400 hover:text-emerald-600 sm:self-center"
+        {loading ? (
+          <div className="py-12 text-center text-sm text-slate-500">
+            Loading tasks...
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredTasks.map((task) => (
+              <article
+                key={task.id}
+                className="flex flex-col gap-4 rounded-xl border border-slate-100 p-4 transition hover:border-violet-200 sm:flex-row sm:items-center"
               >
-                {task.status === "Completed" ? (
-                  <CheckCircle2 className="text-emerald-500" size={22} />
-                ) : (
-                  <Circle size={22} />
-                )}
-              </button>
-
-              <div className="min-w-0 flex-1">
-                <h3
-                  className={`font-semibold ${
-                    task.status === "Completed"
-                      ? "text-slate-400 line-through"
-                      : "text-slate-800"
-                  }`}
+                <button
+                  onClick={() => toggleComplete(task)}
+                  aria-label={`Toggle completion for ${task.title}`}
+                  className="self-start text-slate-400 hover:text-emerald-600 sm:self-center"
                 >
-                  {task.title}
-                </h3>
+                  {task.status === "Completed" ? (
+                    <CheckCircle2
+                      className="text-emerald-500"
+                      size={22}
+                    />
+                  ) : (
+                    <Circle size={22} />
+                  )}
+                </button>
+
+                <div className="min-w-0 flex-1">
+                  <h3
+                    className={`font-semibold ${
+                      task.status === "Completed"
+                        ? "text-slate-400 line-through"
+                        : "text-slate-800"
+                    }`}
+                  >
+                    {task.title}
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {task.project}
+                    {task.dueDate && ` · Due ${task.dueDate}`}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <span
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium ${
+                      statusStyles[task.status] ||
+                      "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {task.status}
+                  </span>
+
+                  <span
+                    className={`text-xs font-semibold ${
+                      priorityStyles[task.priority] ||
+                      "text-slate-500"
+                    }`}
+                  >
+                    {task.priority}
+                  </span>
+
+                  <button
+                    onClick={() => openEditForm(task)}
+                    aria-label="Edit task"
+                    className="rounded-lg p-2 text-slate-500 hover:bg-violet-50 hover:text-violet-600"
+                  >
+                    <Pencil size={17} />
+                  </button>
+
+                  <button
+                    onClick={() => deleteTask(task.id)}
+                    aria-label="Delete task"
+                    className="rounded-lg p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600"
+                  >
+                    <Trash2 size={17} />
+                  </button>
+                </div>
+              </article>
+            ))}
+
+            {filteredTasks.length === 0 && (
+              <div className="py-12 text-center">
+                <p className="font-semibold text-slate-700">
+                  {tasks.length === 0
+                    ? "No tasks yet"
+                    : "No tasks found"}
+                </p>
                 <p className="mt-1 text-sm text-slate-500">
-                  {task.project}
-                  {task.dueDate && ` · Due ${task.dueDate}`}
+                  Try a different search or create a new task.
                 </p>
               </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <span
-                  className={`rounded-full px-3 py-1.5 text-xs font-medium ${
-                    statusStyles[task.status]
-                  }`}
-                >
-                  {task.status}
-                </span>
-
-                <span
-                  className={`text-xs font-semibold ${priorityStyles[task.priority]}`}
-                >
-                  {task.priority}
-                </span>
-
-                <button
-                  onClick={() => openEditForm(task)}
-                  aria-label="Edit task"
-                  className="rounded-lg p-2 text-slate-500 hover:bg-violet-50 hover:text-violet-600"
-                >
-                  <Pencil size={17} />
-                </button>
-
-                <button
-                  onClick={() => deleteTask(task.id)}
-                  aria-label="Delete task"
-                  className="rounded-lg p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600"
-                >
-                  <Trash2 size={17} />
-                </button>
-              </div>
-            </article>
-          ))}
-
-          {filteredTasks.length === 0 && (
-            <div className="py-12 text-center">
-              <p className="font-semibold text-slate-700">No tasks found</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Try a different search or create a new task.
-              </p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </section>
 
       {showForm && (
@@ -321,7 +411,9 @@ export default function Tasks() {
               </button>
             </div>
 
-            <label className="mb-2 block text-sm font-medium">Task title</label>
+            <label className="mb-2 block text-sm font-medium">
+              Task title
+            </label>
             <input
               required
               value={form.title}
@@ -332,7 +424,9 @@ export default function Tasks() {
               className="mb-4 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-violet-500"
             />
 
-            <label className="mb-2 block text-sm font-medium">Project</label>
+            <label className="mb-2 block text-sm font-medium">
+              Project
+            </label>
             <select
               value={form.project}
               onChange={(event) =>
@@ -343,11 +437,15 @@ export default function Tasks() {
               <option>Website Redesign</option>
               <option>Mobile App</option>
               <option>Marketing Campaign</option>
+              <option>TaskFlow</option>
+              <option>General</option>
             </select>
 
             <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label className="mb-2 block text-sm font-medium">Status</label>
+                <label className="mb-2 block text-sm font-medium">
+                  Status
+                </label>
                 <select
                   value={form.status}
                   onChange={(event) =>
@@ -362,7 +460,9 @@ export default function Tasks() {
               </div>
 
               <div>
-                <label className="mb-2 block text-sm font-medium">Priority</label>
+                <label className="mb-2 block text-sm font-medium">
+                  Priority
+                </label>
                 <select
                   value={form.priority}
                   onChange={(event) =>
@@ -377,7 +477,9 @@ export default function Tasks() {
               </div>
             </div>
 
-            <label className="mb-2 block text-sm font-medium">Due date</label>
+            <label className="mb-2 block text-sm font-medium">
+              Due date
+            </label>
             <input
               type="date"
               value={form.dueDate}
@@ -397,9 +499,14 @@ export default function Tasks() {
               </button>
               <button
                 type="submit"
-                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-700"
+                disabled={saving}
+                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {editingId !== null ? "Save Changes" : "Create Task"}
+                {saving
+                  ? "Saving..."
+                  : editingId !== null
+                    ? "Save Changes"
+                    : "Create Task"}
               </button>
             </div>
           </form>

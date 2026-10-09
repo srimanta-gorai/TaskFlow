@@ -1,5 +1,6 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import axios from "axios";
 import {
   DndContext,
   DragOverlay,
@@ -18,48 +19,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Plus, CalendarDays, GripVertical } from "lucide-react";
 
-const initialTasks = [
-  {
-    id: "task-1",
-    title: "Design dashboard layout",
-    project: "Website Redesign",
-    priority: "High",
-    dueDate: "2026-10-15",
-    status: "todo",
-  },
-  {
-    id: "task-2",
-    title: "Create reusable components",
-    project: "TaskFlow",
-    priority: "Medium",
-    dueDate: "2026-10-17",
-    status: "todo",
-  },
-  {
-    id: "task-3",
-    title: "Build responsive navigation",
-    project: "Mobile App",
-    priority: "High",
-    dueDate: "2026-10-18",
-    status: "inprogress",
-  },
-  {
-    id: "task-4",
-    title: "Implement chart section",
-    project: "TaskFlow",
-    priority: "Low",
-    dueDate: "2026-10-20",
-    status: "inprogress",
-  },
-  {
-    id: "task-5",
-    title: "Set up project repository",
-    project: "TaskFlow",
-    priority: "Medium",
-    dueDate: "2026-10-09",
-    status: "done",
-  },
-];
+const API_URL = "http://localhost:5000/api/tasks";
 
 const columns = [
   { id: "todo", title: "To Do", color: "bg-amber-500" },
@@ -73,7 +33,20 @@ const priorityStyles = {
   Low: "bg-slate-100 text-slate-600",
 };
 
-function TaskCard({ task, onAddTask }) {
+function toKanbanTask(task) {
+  return {
+    id: task._id || task.id,
+    title: task.title,
+    project: task.project || "General",
+    priority: task.priority || "Medium",
+    dueDate: task.dueDate
+      ? String(task.dueDate).slice(0, 10)
+      : "",
+    status: task.status || "todo",
+  };
+}
+
+function TaskCard({ task }) {
   const {
     attributes,
     listeners,
@@ -98,7 +71,7 @@ function TaskCard({ task, onAddTask }) {
       <div className="mb-3 flex items-start justify-between gap-2">
         <span
           className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-            priorityStyles[task.priority]
+            priorityStyles[task.priority] || priorityStyles.Medium
           }`}
         >
           {task.priority} priority
@@ -180,8 +153,11 @@ function KanbanColumn({ column, tasks, onAddTask }) {
 }
 
 export default function Kanban() {
-  const [tasks, setTasks] = useState(initialTasks);
+  const [tasks, setTasks] = useState([]);
   const [activeTask, setActiveTask] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -192,6 +168,25 @@ export default function Kanban() {
     })
   );
 
+  useEffect(() => {
+    async function fetchTasks() {
+      try {
+        setError("");
+        const response = await axios.get(API_URL);
+        setTasks(response.data.map(toKanbanTask));
+      } catch (err) {
+        console.error("Failed to load Kanban tasks:", err);
+        setError(
+          "Could not load tasks. Make sure the backend server is running."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchTasks();
+  }, []);
+
   function findTask(id) {
     return tasks.find((task) => task.id === id);
   }
@@ -200,7 +195,7 @@ export default function Kanban() {
     setActiveTask(findTask(event.active.id) || null);
   }
 
-  function handleDragEnd(event) {
+  async function handleDragEnd(event) {
     const { active, over } = event;
     setActiveTask(null);
 
@@ -210,7 +205,9 @@ export default function Kanban() {
     if (!draggedTask) return;
 
     const targetTask = findTask(over.id);
-    const targetColumn = columns.find((column) => column.id === over.id);
+    const targetColumn = columns.find(
+      (column) => column.id === over.id
+    );
 
     let newStatus = draggedTask.status;
 
@@ -220,30 +217,57 @@ export default function Kanban() {
       newStatus = targetTask.status;
     }
 
-    if (newStatus !== draggedTask.status) {
-      setTasks((current) =>
-        current.map((task) =>
-          task.id === active.id ? { ...task, status: newStatus } : task
-        )
-      );
+    if (newStatus === draggedTask.status) return;
+
+    const previousTasks = tasks;
+
+    // Update the UI immediately.
+    setTasks((current) =>
+      current.map((task) =>
+        task.id === draggedTask.id
+          ? { ...task, status: newStatus }
+          : task
+      )
+    );
+
+    try {
+      setSaving(true);
+      setError("");
+
+      await axios.put(`${API_URL}/${draggedTask.id}`, {
+        status: newStatus,
+      });
+    } catch (err) {
+      console.error("Failed to update task status:", err);
+      setTasks(previousTasks);
+      setError("Could not save the task status. Please try again.");
+    } finally {
+      setSaving(false);
     }
   }
 
-  function addTask(status) {
+  async function addTask(status) {
     const title = window.prompt("Enter the new task title:");
     if (!title?.trim()) return;
 
-    setTasks((current) => [
-      {
-        id: `task-${Date.now()}`,
+    try {
+      setError("");
+
+      const response = await axios.post(API_URL, {
         title: title.trim(),
         project: "TaskFlow",
         priority: "Medium",
-        dueDate: "",
+        dueDate: null,
         status,
-      },
-      ...current,
-    ]);
+      });
+
+      const newTask = toKanbanTask(response.data);
+
+      setTasks((current) => [newTask, ...current]);
+    } catch (err) {
+      console.error("Failed to create task:", err);
+      setError("Could not create the task. Please try again.");
+    }
   }
 
   return (
@@ -261,44 +285,68 @@ export default function Kanban() {
 
         <button
           onClick={() => addTask("todo")}
-          className="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white hover:bg-violet-700"
+          disabled={loading}
+          className="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus size={18} />
           New Task
         </button>
       </header>
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCorners}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragCancel={() => setActiveTask(null)}
-      >
-        <div className="grid items-start gap-5 lg:grid-cols-3">
-          {columns.map((column) => (
-            <KanbanColumn
-              key={column.id}
-              column={column}
-              tasks={tasks.filter((task) => task.status === column.id)}
-              onAddTask={addTask}
-            />
-          ))}
+      {error && (
+        <div
+          role="alert"
+          className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"
+        >
+          {error}
         </div>
+      )}
 
-        <DragOverlay>
-          {activeTask ? (
-            <div className="rotate-2 rounded-xl border border-violet-300 bg-white p-4 shadow-xl">
-              <p className="font-semibold text-slate-800">
-                {activeTask.title}
-              </p>
-              <p className="mt-1 text-sm text-slate-500">
-                {activeTask.project}
-              </p>
-            </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
+      {saving && (
+        <p className="mb-4 text-sm text-slate-500">
+          Saving task status...
+        </p>
+      )}
+
+      {loading ? (
+        <div className="rounded-2xl bg-slate-100 p-10 text-center text-slate-500">
+          Loading tasks from MongoDB...
+        </div>
+      ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setActiveTask(null)}
+        >
+          <div className="grid items-start gap-5 lg:grid-cols-3">
+            {columns.map((column) => (
+              <KanbanColumn
+                key={column.id}
+                column={column}
+                tasks={tasks.filter(
+                  (task) => task.status === column.id
+                )}
+                onAddTask={addTask}
+              />
+            ))}
+          </div>
+
+          <DragOverlay>
+            {activeTask ? (
+              <div className="rotate-2 rounded-xl border border-violet-300 bg-white p-4 shadow-xl">
+                <p className="font-semibold text-slate-800">
+                  {activeTask.title}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {activeTask.project}
+                </p>
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      )}
     </main>
   );
 }

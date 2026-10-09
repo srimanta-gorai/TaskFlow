@@ -1,5 +1,6 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import axios from "axios";
 import {
   Plus,
   Search,
@@ -10,35 +11,7 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 
-const initialProjects = [
-  {
-    id: 1,
-    name: "Website Redesign",
-    description: "Redesign the company website with a modern user experience.",
-    category: "Design",
-    progress: 75,
-    deadline: "2026-10-18",
-    color: "violet",
-  },
-  {
-    id: 2,
-    name: "Mobile App",
-    description: "Build a responsive mobile application for customers.",
-    category: "Development",
-    progress: 48,
-    deadline: "2026-10-22",
-    color: "blue",
-  },
-  {
-    id: 3,
-    name: "Marketing Campaign",
-    description: "Plan and execute the next digital marketing campaign.",
-    category: "Marketing",
-    progress: 90,
-    deadline: "2026-10-15",
-    color: "emerald",
-  },
-];
+const API_URL = "http://localhost:5000/api/projects";
 
 const emptyProject = {
   name: "",
@@ -63,13 +36,47 @@ const progressStyles = {
   amber: "bg-amber-500",
 };
 
+function toUIProject(project) {
+  return {
+    id: project._id,
+    name: project.name,
+    description: project.description || "",
+    category: project.category || "Development",
+    progress: project.progress ?? 0,
+    deadline: project.deadline
+      ? String(project.deadline).slice(0, 10)
+      : "",
+    color: project.color || "violet",
+  };
+}
+
 export default function Projects() {
-  const [projects, setProjects] = useState(initialProjects);
+  const [projects, setProjects] = useState([]);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyProject);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function fetchProjects() {
+    try {
+      setError("");
+      const response = await axios.get(API_URL);
+      setProjects(response.data.map(toUIProject));
+    } catch (err) {
+      console.error("Failed to load projects:", err);
+      setError("Could not load projects. Check that your backend is running.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchProjects();
+  }, []);
 
   const filteredProjects = useMemo(() => {
     return projects.filter((project) => {
@@ -103,38 +110,55 @@ export default function Projects() {
     setShowForm(true);
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
 
     if (!form.name.trim()) return;
 
-    if (editingId !== null) {
-      setProjects((current) =>
-        current.map((project) =>
-          project.id === editingId ? { ...project, ...form } : project
-        )
-      );
-    } else {
-      setProjects((current) => [
-        {
-          id: Date.now(),
-          ...form,
-        },
-        ...current,
-      ]);
-    }
+    const projectData = {
+      ...form,
+      name: form.name.trim(),
+      progress: Number(form.progress),
+      deadline: form.deadline || null,
+    };
 
-    setShowForm(false);
-    setEditingId(null);
-    setForm(emptyProject);
+    try {
+      setSaving(true);
+      setError("");
+
+      if (editingId !== null) {
+        await axios.put(`${API_URL}/${editingId}`, projectData);
+      } else {
+        await axios.post(API_URL, projectData);
+      }
+
+      await fetchProjects();
+      setShowForm(false);
+      setEditingId(null);
+      setForm(emptyProject);
+    } catch (err) {
+      console.error("Failed to save project:", err);
+      setError(
+        err.response?.data?.message || "Could not save the project."
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function deleteProject(id) {
+  async function deleteProject(id) {
     if (!window.confirm("Delete this project?")) return;
 
-    setProjects((current) =>
-      current.filter((project) => project.id !== id)
-    );
+    try {
+      setError("");
+      await axios.delete(`${API_URL}/${id}`);
+      setProjects((current) =>
+        current.filter((project) => project.id !== id)
+      );
+    } catch (err) {
+      console.error("Failed to delete project:", err);
+      setError("Could not delete the project.");
+    }
   }
 
   return (
@@ -158,6 +182,18 @@ export default function Projects() {
           New Project
         </button>
       </header>
+
+      {error && (
+        <div
+          role="alert"
+          className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700"
+        >
+          <span>{error}</span>
+          <button onClick={() => setError("")} aria-label="Dismiss error">
+            <X size={18} />
+          </button>
+        </div>
+      )}
 
       <section className="mb-6 grid gap-4 sm:grid-cols-3">
         {[
@@ -207,93 +243,105 @@ export default function Projects() {
         </select>
       </section>
 
-      <section className="grid gap-5 md:grid-cols-2 2xl:grid-cols-3">
-        {filteredProjects.map((project) => (
-          <article
-            key={project.id}
-            className="rounded-2xl border border-slate-200 bg-white p-5 transition hover:-translate-y-1 hover:shadow-lg"
-          >
-            <div className="mb-5 flex items-start justify-between">
-              <div
-                className={`flex h-12 w-12 items-center justify-center rounded-xl ${
-                  colorStyles[project.color] || colorStyles.violet
-                }`}
+      {loading ? (
+        <div className="py-12 text-center text-sm text-slate-500">
+          Loading projects...
+        </div>
+      ) : (
+        <>
+          <section className="grid gap-5 md:grid-cols-2 2xl:grid-cols-3">
+            {filteredProjects.map((project) => (
+              <article
+                key={project.id}
+                className="rounded-2xl border border-slate-200 bg-white p-5 transition hover:-translate-y-1 hover:shadow-lg"
               >
-                <FolderKanban size={23} />
-              </div>
+                <div className="mb-5 flex items-start justify-between">
+                  <div
+                    className={`flex h-12 w-12 items-center justify-center rounded-xl ${
+                      colorStyles[project.color] || colorStyles.violet
+                    }`}
+                  >
+                    <FolderKanban size={23} />
+                  </div>
 
-              <div className="flex gap-1">
-                <button
-                  onClick={() => openEditForm(project)}
-                  className="rounded-lg px-3 py-2 text-xs font-semibold text-violet-600 hover:bg-violet-50"
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => openEditForm(project)}
+                      className="rounded-lg px-3 py-2 text-xs font-semibold text-violet-600 hover:bg-violet-50"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => deleteProject(project.id)}
+                      aria-label={`Delete ${project.name}`}
+                      className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                    >
+                      <Trash2 size={17} />
+                    </button>
+                  </div>
+                </div>
+
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${
+                    colorStyles[project.color] || colorStyles.violet
+                  }`}
                 >
-                  Edit
-                </button>
-                <button
-                  onClick={() => deleteProject(project.id)}
-                  aria-label={`Delete ${project.name}`}
-                  className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                >
-                  <Trash2 size={17} />
-                </button>
-              </div>
-            </div>
+                  {project.category}
+                </span>
 
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-medium ${
-                colorStyles[project.color] || colorStyles.violet
-              }`}
-            >
-              {project.category}
-            </span>
+                <h2 className="mt-4 text-lg font-bold text-slate-900">
+                  {project.name}
+                </h2>
 
-            <h2 className="mt-4 text-lg font-bold text-slate-900">
-              {project.name}
-            </h2>
+                <p className="mt-2 min-h-10 text-sm leading-6 text-slate-500">
+                  {project.description || "No description added."}
+                </p>
 
-            <p className="mt-2 min-h-10 text-sm leading-6 text-slate-500">
-              {project.description || "No description added."}
-            </p>
+                <div className="mt-6 flex items-center justify-between">
+                  <p className="text-sm font-medium text-slate-600">
+                    Progress
+                  </p>
+                  <p className="text-sm font-bold text-slate-900">
+                    {project.progress}%
+                  </p>
+                </div>
 
-            <div className="mt-6 flex items-center justify-between">
-              <p className="text-sm font-medium text-slate-600">Progress</p>
-              <p className="text-sm font-bold text-slate-900">
-                {project.progress}%
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className={`h-full rounded-full ${
+                      progressStyles[project.color] || progressStyles.violet
+                    }`}
+                    style={{
+                      width: `${project.progress}%`,
+                    }}
+                  />
+                </div>
+
+                <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <CalendarDays size={16} />
+                    {project.deadline || "No deadline"}
+                  </div>
+                  <span className="flex items-center gap-1 text-xs font-medium text-slate-500">
+                    Details <ArrowUpRight size={14} />
+                  </span>
+                </div>
+              </article>
+            ))}
+          </section>
+
+          {filteredProjects.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-slate-300 py-16 text-center">
+              <FolderKanban className="mx-auto text-slate-400" size={36} />
+              <p className="mt-4 font-semibold text-slate-800">
+                No projects found
+              </p>
+              <p className="mt-2 text-sm text-slate-500">
+                Try another search or create a new project.
               </p>
             </div>
-
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-              <div
-                className={`h-full rounded-full ${
-                  progressStyles[project.color] || progressStyles.violet
-                }`}
-                style={{ width: `${project.progress}%` }}
-              />
-            </div>
-
-            <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                <CalendarDays size={16} />
-                {project.deadline || "No deadline"}
-              </div>
-              <span className="flex items-center gap-1 text-xs font-medium text-slate-500">
-                Details <ArrowUpRight size={14} />
-              </span>
-            </div>
-          </article>
-        ))}
-      </section>
-
-      {filteredProjects.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-slate-300 py-16 text-center">
-          <FolderKanban className="mx-auto text-slate-400" size={36} />
-          <p className="mt-4 font-semibold text-slate-800">
-            No projects found
-          </p>
-          <p className="mt-2 text-sm text-slate-500">
-            Try another search or create a new project.
-          </p>
-        </div>
+          )}
+        </>
       )}
 
       {showForm && (
@@ -414,9 +462,14 @@ export default function Projects() {
               </button>
               <button
                 type="submit"
-                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-700"
+                disabled={saving}
+                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
               >
-                {editingId !== null ? "Save Changes" : "Create Project"}
+                {saving
+                  ? "Saving..."
+                  : editingId !== null
+                    ? "Save Changes"
+                    : "Create Project"}
               </button>
             </div>
           </form>
